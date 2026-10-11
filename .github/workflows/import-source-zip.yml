@@ -18,15 +18,18 @@ jobs:
         with:
           ref: main
           persist-credentials: true
-      - name: Extract source and create the project tree
+      - name: Reassemble archive, extract source, and commit the source tree
         shell: bash
         run: |
           set -euo pipefail
           test -f sb3-to-js-source.zip
+          test -d bootstrap-chunks
+          cat bootstrap-chunks/part-*.b64 | base64 -d > "$RUNNER_TEMP/sb3-to-js-source.zip"
           mkdir -p "$RUNNER_TEMP/sb3-to-js"
-          unzip -q sb3-to-js-source.zip -d "$RUNNER_TEMP/sb3-to-js"
+          unzip -q "$RUNNER_TEMP/sb3-to-js-source.zip" -d "$RUNNER_TEMP/sb3-to-js"
           test -d "$RUNNER_TEMP/sb3-to-js/sb3-to-js"
           cp -a "$RUNNER_TEMP/sb3-to-js/sb3-to-js/." .
+          rm -rf bootstrap-chunks
           rm -f sb3-to-js-source.zip
           rm -f .github/workflows/import-source-zip.yml
           git config user.name "github-actions[bot]"
