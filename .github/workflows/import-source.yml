@@ -1,0 +1,90 @@
+name: Import source archive
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'sb3-to-js (2).zip'
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Detect archive
+        id: detect
+        shell: bash
+        run: |
+          if [[ -f 'sb3-to-js (2).zip' ]]; then
+            echo 'present=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'No import archive in this commit.'
+          fi
+
+      - name: Verify archive and test source
+        if: steps.detect.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive='sb3-to-js (2).zip'
+          expected='63531c278215b4770af74f74b7c44143efdb2ac1089141d8a1c3496b0df5c1a3'
+          actual="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::The uploaded ZIP does not match the verified source archive."
+            echo "Expected: $expected"
+            echo "Actual:   $actual"
+            exit 1
+          fi
+          rm -rf /tmp/sb3-source-import
+          mkdir -p /tmp/sb3-source-import
+          python - <<'PY'
+          from pathlib import PurePosixPath
+          from zipfile import ZipFile
+
+          archive = 'sb3-to-js (2).zip'
+          destination = '/tmp/sb3-source-import'
+          with ZipFile(archive) as z:
+              bad = z.testzip()
+              if bad is not None:
+                  raise SystemExit(f'Corrupt ZIP member: {bad}')
+              files = [entry for entry in z.infolist() if not entry.is_dir()]
+              if len(files) != 38:
+                  raise SystemExit(f'Expected 38 files, found {len(files)}')
+              for entry in files:
+                  path = PurePosixPath(entry.filename)
+                  if path.is_absolute() or '..' in path.parts:
+                      raise SystemExit(f'Unsafe ZIP path: {entry.filename}')
+                  if not entry.filename.startswith('sb3-to-js/'):
+                      raise SystemExit(f'Unexpected path prefix: {entry.filename}')
+              if not any(entry.filename == 'sb3-to-js/src/compiler.js' for entry in files):
+                  raise SystemExit('src/compiler.js is missing')
+              if not any(entry.filename == 'sb3-to-js/test/js2sb3.test.js' for entry in files):
+                  raise SystemExit('The test suite is missing')
+              z.extractall(destination)
+          PY
+          npm --prefix /tmp/sb3-source-import/sb3-to-js test
+
+      - name: Replace incomplete tree with verified source
+        if: steps.detect.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf -- {} +
+          cp -a /tmp/sb3-source-import/sb3-to-js/. .
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'The repository already matches the verified archive.'
+          else
+            git commit -m 'Restore complete source tree from verified archive'
+            git push origin HEAD:main
+          fi
